@@ -39,9 +39,9 @@ export default defineConfigWithVueTs(
     files: ['**/*.ts', '**/*.vue'],
     rules: {
       '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
-      'vue/block-lang': 'off',
+      'vue/block-lang': 0,
       'vue/multi-word-component-names': 'off',
-      '@typescript-eslint/no-unused-vars': 'warn',
+      '@typescript-eslint/no-unused-vars': 1,
     },
   },
   // https://github.com/vuejs/eslint-config-typescript
