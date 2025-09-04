@@ -2,29 +2,6 @@
   <div class="flex justify-center">
     <div class="full-height flex">
       <!-- Listado lateral de comentarios -->
-      <div class="q-pa-md" style="min-width: 250px; border-right: 1px solid #ccc">
-        <q-list>
-          <q-item-label header>Comentarios</q-item-label>
-          <q-item
-            v-for="comment in comments"
-            :key="comment.id"
-            clickable
-            @click="highlightComment(comment.id)"
-          >
-            <q-item-section>{{ comment.text }}</q-item-section>
-            <q-item-section side>
-              <q-btn
-                icon="delete"
-                color="negative"
-                size="sm"
-                flat
-                round
-                @click.stop="removeComment(comment.id)"
-              />
-            </q-item-section>
-          </q-item>
-        </q-list>
-      </div>
 
       <!-- Contenido principal -->
       <div class="col">
@@ -36,26 +13,43 @@
           {{ title }}
         </header>
 
-        <div class="q-mx-lg q-my-md flex items-center gap-2">
-          <q-btn label="Agregar comentario" @click="addComment" color="primary" />
-          <q-input
-            v-model="inputText"
-            label="Nuevo comentario"
-            dense
-            outlined
-            @keyup.enter="addComment"
-          />
-        </div>
+        <div class="q-mx-lg q-my-md flex items-center gap-2"></div>
 
-        <ckeditor
-          v-model="model"
-          :disabled="disabled || readonly"
-          :editor="ClassicEditor"
-          :config="config"
-          :class="props.class"
-          style="flex-grow: 1"
-          @ready="onEditorReady"
-        />
+        <!-- poner en dos columnas pegadas el editor y el listado de -->
+        <div style="display: flex">
+          <ckeditor
+            v-model="model"
+            :disabled="disabled || readonly"
+            :editor="ClassicEditor"
+            :config="config"
+            :class="props.class"
+            style="flex-grow: 1"
+            @ready="onEditorReady"
+          />
+          <div v-if="showComments" style="min-width: 350px; border: 1px solid #ccc">
+            <q-list>
+              <q-item-label header>Comentarios</q-item-label>
+              <q-item
+                v-for="comment in comments"
+                :key="comment.id"
+                clickable
+                @click="highlightComment(comment.id)"
+              >
+                <q-item-section>{{ comment.text }}</q-item-section>
+                <q-item-section side>
+                  <q-btn
+                    icon="delete"
+                    color="negative"
+                    size="sm"
+                    flat
+                    round
+                    @click.stop="removeComment(comment.id)"
+                  />
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </div>
+        </div>
 
         <div v-if="hint" class="q-pa-sm" style="font-size: 12px">
           {{ hint }}
@@ -89,18 +83,22 @@ import {
   Link,
   Alignment,
   PasteFromOffice,
-  Plugin,
-  ButtonView,
+  type Editor,
 } from 'ckeditor5';
-// import { ButtonView } from 'ckeditor5/src/ui.js';
-import { api } from 'boot/axios';
+
 import { Ckeditor } from '@ckeditor/ckeditor5-vue';
 import 'ckeditor5/ckeditor5.css';
 import '@ckeditor/ckeditor5-build-classic/build/translations/es';
+import { CommentsPlugin } from 'src/utils/CommentsPlugin';
 import { useQuasar } from 'quasar';
+
+import { useCommentDialog } from './useCommentDialog';
+import { MyCustomUploadAdapterPluginGenerator } from './UploadearPlugin';
+const { getCommentText } = useCommentDialog();
 const $q = useQuasar();
 
-const model = defineModel('modelValue', String);
+const model = defineModel<string>('modelValue');
+const comments = defineModel<{ id: string; text: string }[]>('comments');
 const props = defineProps({
   hint: { type: String, default: '' },
   title: { type: String, default: '' },
@@ -137,294 +135,53 @@ const props = defineProps({
     default: false,
   },
 });
-const editorInstance = ref(null);
-const commentCounter = ref(1);
-const comments = ref([{ id: 0, text: 'comentario inicial' }]);
-const inputText = ref('');
+const emits = defineEmits<{
+  (e: 'save'): void;
+  (
+    e: 'create-comment',
+    comment: {
+      id: string;
+      text: string;
+    },
+  ): Promise<void>;
+  (e: 'delete-comment', commentId: string): void;
+}>();
 
-function addComment() {
-  const editor = editorInstance.value;
-  const selection = editor.model.document.selection;
-  const range = selection.getFirstRange();
-  let hasComment = false;
+const MyCustomUploadAdapterPlugin = MyCustomUploadAdapterPluginGenerator(props.imagesUrl);
 
-  for (const item of range.getItems()) {
-    if (item.hasAttribute('comment-id')) {
-      hasComment = true;
-      break;
-    }
-  }
+const editorInstance = ref<Editor | null>(null);
+const commentsApi = ref<{
+  removeComment: (id: string) => void;
+  highlightComment: (id: string | number) => void;
+  changeCommentsVisivility: (state: boolean) => void;
+} | null>(null);
 
-  if (hasComment) {
-    $q.notify({
-      message: 'Este texto ya tiene un comentario',
-      color: 'info',
-      position: 'top',
-    });
-    return;
-  }
-  if (!selection || selection.isCollapsed) {
-    alert('Selecciona un texto para comentar');
-    return;
-  }
+const showComments = ref(false);
 
-  const commentId = `comment-${commentCounter.value}`;
-  const commentText = inputText.value.trim();
-  console.log(
-    selection.getFirstRange(),
-    selection.getSelectedElement(),
-    selection.getSelectedBlocks(),
-  );
-  if (!commentText) return;
-
-  editor.model.change((writer) => {
-    const range = editor.model.document.selection.getFirstRange();
-    writer.setAttribute('comment-id', commentCounter.value, range);
-  });
-
-  // Guardar comentario en lista
-  comments.value.push({ id: commentCounter.value, text: commentText });
-  commentCounter.value++;
+function removeComment(commentId: string) {
+  commentsApi.value?.removeComment(commentId);
+  emits('save');
 }
 
-function removeComment(commentId) {
-  const editor = editorInstance.value;
-  const model = editor.model;
-  const root = model.document.getRoot();
-
-  model.change((writer) => {
-    for (const element of root.getChildren()) {
-      for (const item of model.createRangeIn(element)) {
-        const node = item.item;
-        if (node.hasAttribute?.('comment-id') && node.getAttribute('comment-id') == commentId) {
-          writer.removeAttribute('comment-id', node);
-        }
-      }
-    }
-
-    // Quitar de la lista visual también
-    const index = comments.value.findIndex((c) => c.id == commentId);
-    if (index !== -1) {
-      comments.value.splice(index, 1);
-    }
-  });
-}
-
-function onEditorReady(editor) {
+function onEditorReady(editor: Editor) {
   editorInstance.value = editor;
-  editorInstance.value.editing.view.document.on('click', (evt, domEvt) => {
-    const target = domEvt.domTarget;
-    console.log('click', target);
-    const commentId = target.getAttribute?.('data-comment-id');
-    console.log('commentId', commentId);
-    if (commentId) {
-      const found = comments.value.find((c) => c.id == commentId);
-      if (found) alert(found.text);
-    }
-  });
-  console.log('EDITOR HTML:', editor.getData());
 
-  const root = editor.model.document.getRoot();
-  for (const node of root.getChildren()) {
-    console.log('NODE:', node.name, [...node.getAttributes()]);
-  }
-}
-
-class MyUploadAdapter {
-  constructor(loader) {
-    // The file loader instance to use during the upload.
-    this.loader = loader;
-  }
-
-  // Starts the upload process.
-  upload() {
-    const upload = async (file) => {
-      const data = new FormData();
-
-      data.append('archivo', file);
-      try {
-        const { data: res } = await api.post(`${props.imagesUrl}`, data);
-        console.log();
-        return {
-          default: `/images/editor/${res}`,
-        };
-      } catch (e) {}
+  // Obtener los métodos del plugin una vez que el editor esté listo
+  const removeCommentMethod = editor.config.get('comments.removeComment') as
+    | ((id: string) => void)
+    | undefined;
+  const highlightCommentMethod = editor.config.get('comments.highlightComment') as
+    | ((id: string | number) => void)
+    | undefined;
+  const changeCommentsVisivility = editor.config.get('comments.changeCommentsVisivility') as
+    | (() => void)
+    | undefined;
+  if (removeCommentMethod && highlightCommentMethod) {
+    commentsApi.value = {
+      removeComment: removeCommentMethod,
+      highlightComment: highlightCommentMethod,
+      changeCommentsVisivility: changeCommentsVisivility!,
     };
-    return this.loader.file.then((file) => upload(file));
-  }
-
-  // Aborts the upload process.
-  abort() {
-    // Reject the promise returned from the upload() method.
-  }
-}
-
-function MyCustomUploadAdapterPlugin(editor) {
-  editor.plugins.get('FileRepository').createUploadAdapter = (loader) => {
-    // Configure the URL to the upload script in your back-end here!
-    return new MyUploadAdapter(loader);
-  };
-}
-
-// function CommentsPlugin(editor) {
-//   editor.model.schema.extend('$text', {
-//     allowAttributes: ['comment-id'],
-//   });
-//   // ↓↓↓ Restaurar al cargar HTML
-//   editor.conversion.for('upcast').elementToAttribute({
-//     view: {
-//       name: 'span',
-//       attributes: {
-//         'data-comment-id': true,
-//       },
-//     },
-//     model: {
-//       key: 'comment-id',
-//       value: (viewElement) => viewElement.getAttribute('data-comment-id'),
-//     },
-//   });
-
-//   // ↓↓↓ Aplicar al guardar/exportar
-//   editor.conversion.for('downcast').attributeToElement({
-//     model: 'comment-id',
-//     view: (value, { writer }) =>
-//       writer.createAttributeElement(
-//         'span',
-//         {
-//           class: 'comment-highlight',
-//           'data-comment-id': value,
-//         },
-//         { priority: 5 },
-//       ),
-//     converterPriority: 'high',
-//   });
-
-//   editor.ui.componentFactory.add('addComment', (locale) => {
-//     const view = new ButtonView(locale);
-
-//     view.set({
-//       label: 'Agregar comentario',
-//       icon: null, // Podés agregar un SVG personalizado
-//       tooltip: true,
-//       withText: true, // para mostrar texto en lugar de icono
-//     });
-
-//     view.on('execute', () => {
-//       // Emitimos un evento que capturamos desde Vue
-//       editor.fire('custom-add-comment');
-//     });
-
-//     return view;
-//   });
-// }
-
-type GetTextHook = () => Promise<string | null> | string | null;
-
-class CommentsPlugin extends Plugin {
-  public static get pluginName() {
-    return 'Comments' as const;
-  }
-
-  private commentCounter = 1;
-
-  public init(): void {
-    const editor = this.editor;
-
-    // Habilitar atributo en el esquema (texto puede tener "comment-id")
-    editor.model.schema.extend('$text', { allowAttributes: ['comment-id'] });
-
-    // UPCAST: HTML -> Modelo (restaurar al cargar)
-    editor.conversion.for('upcast').elementToAttribute({
-      view: {
-        name: 'span',
-        attributes: { 'data-comment-id': true },
-      },
-      model: {
-        key: 'comment-id',
-        value: (viewElement) => viewElement.getAttribute('data-comment-id'),
-      },
-    });
-
-    // DOWNCAST: Modelo -> HTML (aplicar al exportar/mostrar)
-    editor.conversion.for('downcast').attributeToElement({
-      model: 'comment-id',
-      view: (value, { writer }) =>
-        writer.createAttributeElement(
-          'span',
-          { class: 'comment-highlight', 'data-comment-id': String(value) },
-          { priority: 5 },
-        ),
-      converterPriority: 'high',
-    });
-
-    // Registrar botón en la toolbar
-    editor.ui.componentFactory.add('addComment', () => {
-      const button = new ButtonView();
-
-      button.set({
-        label: 'Agregar comentario',
-        withText: true,
-        tooltip: true,
-      });
-
-      button.on('execute', () => async () => {
-        const selection = editor.model.document.selection;
-
-        if (!selection || selection.isCollapsed) {
-          // No hay selección visible: nada que comentar
-          // (Podés integrar una notificación acá si querés)
-          return;
-        }
-
-        // Evitar duplicados: si ya hay comment-id en el rango, salimos
-        const hasComment = this.selectionHasComment(editor);
-        if (hasComment) return;
-
-        // Hook configurable para obtener el texto del comentario
-        // (si no está, usamos prompt)
-        const getTextHook = editor.config.get<GetTextHook>('comments.getText');
-        let commentText: string | null = null;
-
-        if (typeof getTextHook === 'function') {
-          commentText = await Promise.resolve(getTextHook());
-        } else {
-          // fallback
-          commentText = window.prompt('Comentario:');
-        }
-
-        if (!commentText || !commentText.trim()) return;
-
-        // Aplicar el atributo en el rango seleccionado
-        const commentId = String(this.commentCounter++);
-        editor.model.change((writer) => {
-          const range = selection.getFirstRange()!;
-          writer.setAttribute('comment-id', commentId, range);
-        });
-
-        // Callback opcional para que tu app guarde el comentario aparte
-        const onAdded = editor.config.get<(id: string, text: string) => void>('comments.onAdded');
-        if (typeof onAdded === 'function') {
-          onAdded(commentId, commentText.trim());
-        }
-
-        // Efecto visual suave si querés (opcional): buscar en DOM y animar
-        // (lo usual es hacerlo desde el wrapper Vue; acá lo dejo como nota)
-      });
-
-      return button;
-    });
-  }
-
-  private selectionHasComment(editor: any): boolean {
-    const selection = editor.model.document.selection;
-    const range = selection.getFirstRange();
-    if (!range) return false;
-
-    // Recorremos los items del rango y vemos si alguno ya tiene 'comment-id'
-    for (const item of range.getItems()) {
-      if (item.hasAttribute?.('comment-id')) return true;
-    }
-    return false;
   }
 }
 
@@ -446,6 +203,7 @@ const config = computed(() => {
     'imageUpload',
     'link',
     'addComment',
+    'toggleComments',
   ];
   return {
     licenseKey: 'GPL',
@@ -476,7 +234,7 @@ const config = computed(() => {
     ],
     toolbar: props.disabled || props.readonly ? [] : toolbar,
     ui: {
-      poweredBy: false,
+      // poweredBy: false,
     },
     table: {
       contentToolbar: [
@@ -488,14 +246,15 @@ const config = computed(() => {
         'tableCellProperties',
       ],
       tableProperties: {
-        // Esto desactiva la opción de alineación
-
-        alignment: 'right',
+        // Configuración válida: se establece la alineación por defecto usando defaultProperties
+        defaultProperties: {
+          alignment: 'right',
+        },
       },
     },
     image: {
       insert: {
-        type: 'auto',
+        type: 'auto' as const,
       },
       toolbar: [
         'imageStyle:block',
@@ -507,71 +266,44 @@ const config = computed(() => {
         'imageTextAlternative',
       ],
     },
+    comments: {
+      getText: getCommentText, // 👈 acá inyectás el QDialog
+      onAdded: (id: string, text: string) => {
+        // opcional: actualizá tu lista lateral, guardá en store, etc.
+        // comments.value.push({ id, text });
+        console.log('Comentario agregado:', id, text);
+        // comments.value.push({ id, text });
+        void emits('create-comment', { id, text });
+      },
+      onRemoved: (id: string) => {
+        // Quitar de la lista visual
+        console.log('Comentario eliminado:', id);
+        emits('delete-comment', id);
+      },
+      onClick: (id: string, _event: Event) => {
+        console.log('Comentario clickeado:', id);
+        // Manejar click en comentario
+        const found = comments.value.find((c) => c.id == id);
+        if (found) {
+          $q.notify({
+            message: `Comentario: ${found.text}`,
+            position: 'top',
+            timeout: 3000,
+          });
+        }
+      },
+
+      toggleShow: (show: boolean) => {
+        console.log('Mostrar comentarios:', show);
+        showComments.value = show;
+      },
+    },
     language: 'es',
   };
 });
 
-function highlightComment(commentId) {
-  const editor = editorInstance.value;
-  const model = editor.model;
-  const root = model.document.getRoot();
-
-  let foundPositionStart = null;
-  let foundPositionEnd = null;
-
-  // Buscar el rango
-  for (const element of root.getChildren()) {
-    for (const item of model.createRangeIn(element)) {
-      const node = item.item;
-      if (node.hasAttribute?.('comment-id') && node.getAttribute('comment-id') == commentId) {
-        const start = model.createPositionBefore(node);
-        const end = model.createPositionAfter(node);
-        foundPositionStart = start;
-        foundPositionEnd = end;
-        break;
-      }
-    }
-    if (foundPositionStart && foundPositionEnd) break;
-  }
-
-  if (foundPositionStart && foundPositionEnd) {
-    model.change((writer) => {
-      const range = writer.createRange(foundPositionStart, foundPositionEnd);
-      writer.setSelection(range);
-    });
-
-    // Hacer scroll al elemento y aplicar efecto visual
-    setTimeout(() => {
-      const domRoot = editor.editing.view.getDomRoot();
-      const highlighted = domRoot.querySelector(`[data-comment-id="${commentId}"]`);
-      if (highlighted) {
-        highlighted.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-        // Agregar clase animada temporalmente
-        highlighted.classList.add('comment-highlight-active');
-        setTimeout(() => highlighted.classList.remove('comment-highlight-active'), 800);
-      }
-    }, 100);
-  } else {
-    console.warn(`No se encontró el comentario con ID: ${commentId}`);
-  }
-}
-
-function findCommentInElement(element, commentId, writer) {
-  if (element.is('text') && element.hasAttribute('comment-id')) {
-    if (element.getAttribute('comment-id') == commentId) {
-      return writer.createRangeOn(element);
-    }
-  }
-
-  if (element.is('element')) {
-    for (const child of element.getChildren()) {
-      const result = findCommentInElement(child, commentId, writer);
-      if (result) return result;
-    }
-  }
-
-  return null;
+function highlightComment(commentId: string | number) {
+  commentsApi.value?.highlightComment(commentId);
 }
 </script>
 <style>
@@ -595,7 +327,7 @@ function findCommentInElement(element, commentId, writer) {
 }
 
 .ck.ck-editor__main {
-  height: 100%;
+  height: calc(100% - 40px);
 }
 
 .ck.ck-content.ck-editor__editable {
