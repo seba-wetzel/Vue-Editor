@@ -1,7 +1,7 @@
-import { Plugin, ButtonView, type Editor, type ModelElement, type ModelPosition } from 'ckeditor5';
-import Comments from './comments.svg?raw';
+import { ButtonView, Plugin, type Editor, type ModelElement, type ModelPosition } from 'ckeditor5';
 import mdiCommentOffOutline from './comment-off-outline.svg?raw';
 import mdiCommentOutline from './comment-outline.svg?raw';
+import Comments from './comments.svg?raw';
 
 export class CommentsPlugin extends Plugin {
   public static get pluginName() {
@@ -20,6 +20,18 @@ export class CommentsPlugin extends Plugin {
       if (item.hasAttribute?.('comment-id')) return true;
     }
     return false;
+  }
+
+  private applyCommentStyle(element: Element, show: boolean): void {
+    if (show) {
+      // Aplicar estilos inline en lugar de clase CSS
+      (element as HTMLElement).style.backgroundColor = 'yellow';
+      (element as HTMLElement).style.cursor = 'pointer';
+    } else {
+      // Remover estilos inline
+      (element as HTMLElement).style.backgroundColor = '';
+      (element as HTMLElement).style.cursor = '';
+    }
   }
 
   public changeCommentsVisivility(newState: boolean): void {
@@ -42,6 +54,7 @@ export class CommentsPlugin extends Plugin {
       }
     });
   }
+
   public removeComment(commentId: string): void {
     const editor = this.editor;
     const model = editor.model;
@@ -126,7 +139,7 @@ export class CommentsPlugin extends Plugin {
     // Habilitar atributo en el esquema (texto puede tener "comment-id")
     editor.model.schema.extend('$text', { allowAttributes: ['comment-id'] });
 
-    // UPCAST: HTML -> Modelo (restaurar al cargar)
+    // UPCAST: HTML -> Modelo (restaurar al cargar) - SIN la clase CSS
     editor.conversion.for('upcast').elementToAttribute({
       view: {
         name: 'span',
@@ -138,13 +151,25 @@ export class CommentsPlugin extends Plugin {
       },
     });
 
-    // DOWNCAST: Modelo -> HTML (aplicar al exportar/mostrar)
-    editor.conversion.for('downcast').attributeToElement({
+    // DOWNCAST PARA EDICIÓN: Modelo -> Vista (con clase para styling)
+    editor.conversion.for('editingDowncast').attributeToElement({
       model: 'comment-id',
       view: (value, { writer }) =>
         writer.createAttributeElement(
           'span',
           { class: 'comment-highlight', 'data-comment-id': String(value) },
+          { priority: 5 },
+        ),
+      converterPriority: 'high',
+    });
+
+    // DOWNCAST PARA DATA: Modelo -> HTML (SIN clase, solo data attribute)
+    editor.conversion.for('dataDowncast').attributeToElement({
+      model: 'comment-id',
+      view: (value, { writer }) =>
+        writer.createAttributeElement(
+          'span',
+          { 'data-comment-id': String(value) },
           { priority: 5 },
         ),
       converterPriority: 'high',
